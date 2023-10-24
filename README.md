@@ -72,3 +72,10 @@ $ cast --help
 3. Collateral: Exogenous (Crypto)
     1. wETH
     2. wBTC
+
+
+- calculate health factor function
+- set health factor if debt is 0
+- Added a bunch of view function
+
+1. what are our invariants/properties?

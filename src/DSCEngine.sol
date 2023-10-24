@@ -190,6 +190,11 @@ contract DSCEngine is ReentrancyGuard {
         }
     }
 
+    /*
+     * @notice careful! You'll burn your DSC here! Make sure you want to do this..
+     * @dev you might want to use this if you're nervous you might get liquidated and want to just burn
+     * you DSC but keep your collateral in.
+     */
     function burnDsc(uint256 amount) public moreThanZero(amount) {
         _burnDsc(amount, msg.sender, msg.sender);
         _revertIfHealthFactorIsBroken(msg.sender); // I don't think this would ever hit..
@@ -278,8 +283,7 @@ contract DSCEngine is ReentrancyGuard {
      */
     function _healthFactor(address user) private view returns (uint256) {
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
-        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
     }
 
     function _revertIfHealthFactorIsBroken(address user) internal view {
@@ -322,5 +326,17 @@ contract DSCEngine is ReentrancyGuard {
     collateralValueInUsd) 
     {
         (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
+    }
+
+    function _getUsdValue(address token, uint256 amount) private view returns (uint256) 
+    {
+        
+    }
+
+    function _calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd) internal pure returns (uint256) 
+    {
+        if (totalDscMinted == 0) return type(uint256).max;
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
     }
 }
