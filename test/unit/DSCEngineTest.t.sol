@@ -10,6 +10,8 @@ import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
 import {MockFailedTransfer} from "../mocks/MockFailedTransfer.sol";
 import {MockFailedTransferFrom} from "../mocks/MockFailedTransferFrom.sol";
+import {MockFailedMintDSC} from "../mocks/MockFailedMintDSC.sol";
+import {MockV3Aggregator} from "../mocks/MockAggregatorV3.sol";
 
 contract DSCEngineTest is Test {
     DeployDSC deployer;
@@ -22,6 +24,7 @@ contract DSCEngineTest is Test {
     uint256 deployerKey;
 
     uint256 amountCollateral = 10 ether;
+    uint256 amountToMint = 100 ether;
     address public user = address(1);
 
     address public USER = makeAddr("user");
@@ -33,7 +36,7 @@ contract DSCEngineTest is Test {
         (dsc, dsce, config) = deployer.run();
         (ethUsdPriceFeed, btcUsdPriceFeed, weth,,) = config.activeNetworkConfig();
 
-        ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+        ERC20Mock(weth).mint(user, STARTING_ERC20_BALANCE);
     }
 
     ///////////////////////
@@ -132,6 +135,12 @@ contract DSCEngineTest is Test {
         _;
     }
 
+    function testCanDepositCollateralWithoutMinting() public depositedCollateral 
+    {
+        uint256 userBalance = dsc.balanceOf(user);
+        assertEq(userBalance, 0);
+    }
+
     function testCanDepositCollateralAnGetAccountInfo() public depositedCollateral
     {
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = dsce.getAccountInformation(USER);
@@ -140,5 +149,127 @@ contract DSCEngineTest is Test {
         uint256 expectedDepositAmount = dsce.getTokenAmountFromUsd(weth, collateralValueInUsd);
         assertEq(totalDscMinted, expectedTotalDscMinted);
         assertEq(AMOUNT_COLLATERAL, expectedDepositAmount);
+    }
+
+    //////////////////////////////
+    /// depositCollateralAndMintDsc Tests //
+    //////////////////////////////  
+
+    function testRevertsIfMintedDscBreaksHealthFactor() public 
+    {
+        (, int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();
+        amountToMint = (amountCollateral * (uint256(price) * dsce.getAdditionalFeedPrecision())) / dsce.getPrecision();
+        vm.startPrank(user);
+        ERC20Mock(weth).approve(address(dsce), amountCollateral);
+        
+        uint256 expectedHealthFactor = dsce.calculateHealthFactor(amountToMint, dsce.getUsdValue(weth, amountCollateral));
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        dsce.depositCollateralAndMintDsc(weth, amountCollateral, amountToMint);
+        vm.stopPrank();  
+    }
+
+    modifier depositedCollateralAndMintedDsc() {
+        vm.startPrank(user);
+        ERC20Mock(weth).approve(address(dsce), amountCollateral);
+        dsce.depositCollateralAndMintDsc(weth, amountCollateral, amountToMint);
+        vm.stopPrank();
+        _;
+    }
+
+    function testCanMintWithDepositedCollateral() public depositedCollateralAndMintedDsc 
+    {
+        uint256 userBalance = dsc.balanceOf(user);
+        assertEq(userBalance, amountToMint);
+    }
+
+    //////////////////////////////
+    /// mintDsc Tests //
+    //////////////////////////////
+    // This test needs it's own custom setup
+    function testRevertsIfMintFails() public 
+    {
+        // Arrange - Setup
+        MockFailedMintDSC mockDsc = new MockFailedMintDSC();
+        tokenAddresses = [weth];
+        priceFeedAddresses = [ethUsdPriceFeed];
+        address owner = msg.sender;
+        vm.prank(owner);
+        DSCEngine mockDsce = new DSCEngine(
+            tokenAddresses,
+            priceFeedAddresses,
+            address(mockDsc)
+        );
+        mockDsc.transferOwnership(address(mockDsce));
+        // Arrange - User
+        vm.startPrank(user);
+        ERC20Mock(weth).approve(address(mockDsce), amountCollateral);
+
+        vm.expectRevert(DSCEngine.DSCEngine__MintFailed.selector);
+        mockDsce.depositCollateralAndMintDsc(weth, amountCollateral, amountToMint);
+        vm.stopPrank();
+    }
+
+    function testRevertsIfMintAmountIsZero() public 
+    {
+        vm.startPrank(user);
+        ERC20Mock(weth).approve(address(dsce), amountCollateral);
+        dsce.depositCollateralAndMintDsc(weth, amountCollateral, amountToMint);
+        vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
+        dsce.mintDsc(0);
+        vm.stopPrank();
+    }
+
+    function testRevertsIfMintAmountBreaksHealthFactor() public depositedCollateral 
+    {
+        (, int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();
+        amountToMint = (amountCollateral * (uint256(price) * dsce.getAdditionalFeedPrecision())) / dsce.getPrecision();
+
+        vm.startPrank(user);
+        uint256 expectedHealthFactor = 
+            dsce.calculateHealthFactor(amountToMint, dsce.getUsdValue(weth, amountCollateral));
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        dsce.mintDsc(amountToMint);
+        vm.stopPrank();
+    }
+
+    function testCanMintDsc() public 
+    {
+        vm.prank(user);
+        dsce.mintDsc(amountToMint);
+
+        uint256 userBalance = dsc.balanceOf(user);
+        assertEq(userBalance, amountToMint);
+    }
+    //////////////////////////////
+    /// mintDsc Tests //
+    //////////////////////////////
+
+    function testRevertsIfBurnAmountIsZero() public 
+    {
+        vm.startPrank(user);
+        ERC20Mock(weth).approve(address(dsce), amountCollateral);
+        dsce.depositCollateralAndMintDsc(weth, amountCollateral, amountToMint);
+        vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
+        dsce.burnDsc(0);
+        vm.stopPrank();
+
+    }
+
+    function testCantBurnMoreThanUserHas() public 
+    {
+        vm.prank(user);
+        vm.expectRevert();
+        dsce.burnDsc(1);
+    }
+
+    function testCanBurnDsc() public depositedCollateralAndMintedDsc
+    {
+        vm.startPrank(user);
+        dsc.approve(address(dsce), amountToMint);
+        dsce.burnDsc(amountToMint);
+        vm.stopPrank();
+
+        uint256 userBalance = dsc.balanceOf(user);
+        assertEq(userBalance, 0);
     }
 }

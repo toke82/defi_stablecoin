@@ -126,7 +126,7 @@ contract DSCEngine is ReentrancyGuard {
      * @param amountDscToMint The amount of the decentralized stablecoin to mint
      * @notice this function will deposit your collateral and mint DSC in one transaction
      */
-    function depositCollaterallAndMintDsc(
+    function depositCollateralAndMintDsc(
         address tokenCollateralAddress, 
         uint256 amountCollateral, 
         uint256 amountDscToMint
