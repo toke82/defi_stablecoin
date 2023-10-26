@@ -12,8 +12,11 @@ import {MockFailedTransfer} from "../mocks/MockFailedTransfer.sol";
 import {MockFailedTransferFrom} from "../mocks/MockFailedTransferFrom.sol";
 import {MockFailedMintDSC} from "../mocks/MockFailedMintDSC.sol";
 import {MockV3Aggregator} from "../mocks/MockAggregatorV3.sol";
+import {StdCheats} from "forge-std/StdCheats.sol";
 
 contract DSCEngineTest is Test {
+    event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 amount); // if redeemFrom != redeemedTo, then it was liquidated
+
     DeployDSC deployer;
     DecentralizedStableCoin dsc;
     DSCEngine dsce;
@@ -128,7 +131,7 @@ contract DSCEngineTest is Test {
     }
 
     modifier depositedCollateral() {
-        vm.startPrank(USER);
+        vm.startPrank(user);
         ERC20Mock(weth).approve(address(dsce), AMOUNT_COLLATERAL);
         dsce.depositCollateral(weth, AMOUNT_COLLATERAL);
         vm.stopPrank();
@@ -272,4 +275,68 @@ contract DSCEngineTest is Test {
         uint256 userBalance = dsc.balanceOf(user);
         assertEq(userBalance, 0);
     }
+    //////////////////////////////
+    /// redeemCollateral Tests //
+    //////////////////////////////
+
+    // This test needs it's own setup
+    function testRevertsIfTransferFails() public 
+    {
+        // Arrange - Setup
+        address owner = msg.sender;
+        vm.prank(owner);
+        MockFailedTransfer mockDsc = new MockFailedTransfer();
+        tokenAddresses = [address(mockDsc)];
+        priceFeedAddresses = [ethUsdPriceFeed];
+        vm.prank(owner);
+        DSCEngine mockDsce = new DSCEngine(
+            tokenAddresses,
+            priceFeedAddresses,
+            address(mockDsc)
+        );
+        mockDsc.mint(user, amountCollateral);
+
+        vm.prank(owner);
+        mockDsc.transferOwnership(address(mockDsce));
+        // Arrange - User
+        vm.startPrank(user);
+        ERC20Mock(address(mockDsc)).approve(address(mockDsce), amountCollateral);
+        // Act / Assert
+        mockDsce.depositCollateral(address(mockDsc), amountCollateral);
+        vm.expectRevert(DSCEngine.DSCEngine__TransferFailed.selector);
+        mockDsce.redeemCollateral(address(mockDsc), amountCollateral);
+        vm.stopPrank();
+    }
+
+    function testRevertsIfRedeemAmountIsZero() public 
+    {
+        vm.startPrank(user);
+        ERC20Mock(weth).approve(address(dsce), amountCollateral);
+        dsce.depositCollateralAndMintDsc(weth, amountCollateral, amountToMint);
+        vm.expectRevert(DSCEngine.DSCEngine__NeedsMoreThanZero.selector);
+        dsce.redeemCollateral(weth, 0);
+        vm.stopPrank();
+    }
+
+    function testCanRedeemCollateral() public depositedCollateral
+    {
+        vm.startPrank(user);
+        dsce.redeemCollateral(weth, amountCollateral);
+        uint256 userBalance = ERC20Mock(weth).balanceOf(user);
+        assertEq(userBalance, amountCollateral);
+        vm.stopPrank();
+    }
+
+    function testEmitCollateralRedeemedWithCorrectArgs() public depositedCollateral 
+    {
+        vm.expectEmit(true, true, true, true, address(dsce));
+        emit CollateralRedeemed(user, user, weth, amountCollateral);
+        vm.startPrank(user);
+        dsce.redeemCollateral(weth, amountCollateral);
+        vm.stopPrank();
+    }
+    ///////////////////////////////////
+    /// redeemCollateralForDsc Tests //
+    ///////////////////////////////////
+
 }
